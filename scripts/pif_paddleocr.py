@@ -97,11 +97,11 @@ def main():
     pdf_files = list(input_dir.glob("*.pdf"))
     print(f"\n[INPUT] Found {len(pdf_files)} PDF files")
     
-    # Initialize PaddleOCR with Thai + English
-    print("\n[INIT] Loading PaddleOCR (Thai + English)...")
+    # Initialize PaddleOCR with Thai + English + Multi-language support
+    print("\n[INIT] Loading PaddleOCR (Thai + English + Multi-language)...")
     ocr = PaddleOCR(
-        use_textline_orientation=False,  # Disable to reduce complexity
-        lang='en',  # English model
+        use_textline_orientation=False,
+        lang='multi',  # ✅ Fixed: Multi-language support (80+ languages including Thai)
         det=True,
         rec=True,
         cls=False

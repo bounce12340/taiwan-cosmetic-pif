@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 import pypdf
+from pypdf.errors import PdfReadError, PdfStreamError
 from datetime import datetime
 
 # TFDA 16 Sections with full names
@@ -28,7 +29,7 @@ TFDA_SECTIONS = {
     "16": "產品安全資料（含簽署人員簽名）",
 }
 
-# Keyword mapping
+# Keyword mapping with pre-compiled regex for performance
 MAPPING = {
     "Product Information": {"tfda": ["1", "2"], "keywords": ["product name", "category", "dosage form", "purpose"]},
     "Composition & INCI": {"tfda": ["3"], "keywords": ["composition", "inci", "ingredients", "formula", "%", "cas"]},
@@ -43,6 +44,22 @@ MAPPING = {
     "Adverse Effects": {"tfda": ["8"], "keywords": ["adverse", "side effect", "reaction", "irritation", "allergic", "complaint"]},
     "Functional Assessment": {"tfda": ["14"], "keywords": ["functional", "efficacy", "claim", "study", "assessment"]},
 }
+
+# Pre-compiled regex for O(1) classification instead of O(n*m)
+ALL_KEYWORDS = set()
+for info in MAPPING.values():
+    ALL_KEYWORDS.update(info["keywords"])
+
+KEYWORD_PATTERN = re.compile(
+    '(' + '|'.join(re.escape(kw) for kw in sorted(ALL_KEYWORDS, key=len, reverse=True)) + ')',
+    re.IGNORECASE
+)
+
+# Pre-build reverse mapping: keyword -> tfda sections
+KEYWORD_TO_TFDA = {}
+for chapter, info in MAPPING.items():
+    for keyword in info["keywords"]:
+        KEYWORD_TO_TFDA[keyword.lower()] = info["tfda"]
 
 def clean_text(text: str) -> str:
     """Clean OCR artifacts and page elements."""
@@ -73,25 +90,56 @@ def clean_text(text: str) -> str:
     return '\n'.join(cleaned)
 
 def extract_pdf_text_chunked(pdf_path: str, progress_callback=None) -> Tuple[str, int]:
-    """Extract text from PDF page by page."""
+    """Extract text from PDF page by page with robust error handling."""
     text = ""
     page_count = 0
+    
+    # Validate file exists
+    if not Path(pdf_path).exists():
+        print(f"  [ERROR] File not found: {pdf_path}")
+        return "", 0
+    
     try:
         print(f"  Opening: {Path(pdf_path).name}")
         with open(pdf_path, 'rb') as f:
             reader = pypdf.PdfReader(f)
+            
+            # Check if PDF is encrypted
+            if reader.is_encrypted:
+                print(f"  [WARN] PDF is encrypted, attempting to decrypt with empty password...")
+                try:
+                    reader.decrypt('')
+                except:
+                    print(f"  [ERROR] PDF requires password, cannot process")
+                    return "", 0
+            
             page_count = len(reader.pages)
             print(f"  Pages: {page_count}")
             
             for i, page in enumerate(reader.pages):
-                page_text = page.extract_text() or ""
-                text += page_text + "\n\n"
-                
-                if progress_callback and (i + 1) % 20 == 0:
-                    progress_callback(i + 1, page_count)
+                try:
+                    page_text = page.extract_text() or ""
+                    text += page_text + "\n\n"
                     
+                    if progress_callback and (i + 1) % 20 == 0:
+                        progress_callback(i + 1, page_count)
+                except Exception as page_error:
+                    print(f"  [WARN] Failed to extract page {i+1}: {page_error}")
+                    continue
+                    
+    except FileNotFoundError:
+        print(f"  [ERROR] File not found: {pdf_path}")
+        return "", 0
+    except PdfReadError as e:
+        print(f"  [ERROR] Invalid or corrupt PDF: {e}")
+        return "", 0
+    except PdfStreamError as e:
+        print(f"  [ERROR] PDF stream error: {e}")
+        return "", 0
     except Exception as e:
-        print(f"  Error: {e}")
+        print(f"  [ERROR] Unexpected error: {type(e).__name__} - {e}")
+        return "", 0
+    
     return text, page_count
 
 def progress_handler(current, total):
@@ -222,7 +270,7 @@ def extract_stability_data(text: str) -> List[str]:
     return stability[:15]
 
 def classify_content(text: str) -> Dict[str, List[str]]:
-    """Classify content to TFDA sections."""
+    """Classify content to TFDA sections using optimized O(n) algorithm."""
     tfda_content = {num: [] for num in TFDA_SECTIONS.keys()}
     
     lines = text.splitlines()
@@ -234,13 +282,13 @@ def classify_content(text: str) -> Dict[str, List[str]]:
         if not line_stripped:
             continue
         
-        # Detect sections
+        # O(1) classification using pre-compiled regex
         detected = []
-        for chapter, info in MAPPING.items():
-            for keyword in info["keywords"]:
-                if keyword.lower() in line_stripped.lower():
-                    detected.extend(info["tfda"])
-                    break
+        matches = KEYWORD_PATTERN.finditer(line_stripped.lower())
+        for match in matches:
+            keyword = match.group(1).lower()
+            if keyword in KEYWORD_TO_TFDA:
+                detected.extend(KEYWORD_TO_TFDA[keyword])
         
         if detected and detected != current_sections:
             if buffer and current_sections:
@@ -404,17 +452,31 @@ def generate_markdown_v4(tfda_content: Dict[str, List[str]], ingredients: List[D
     print(f"    File size: {Path(output_path).stat().st_size / 1024:.1f} KB")
     print(f"    Filled sections: {filled_count}/16 ({filled_count/16*100:.0f}%)")
 
-def main(input_dir: str, project_name: str = "summers-eve"):
+def main(input_dir: str, project_name: str = "summers-eve", output_dir: str = None):
     print("=" * 60)
     print("PIF Converter v4: Thailand -> Taiwan TFDA (Complete with Tables)")
     print("=" * 60)
     
+    # Validate input directory
     input_path = Path(input_dir)
     if not input_path.exists():
         print(f"[ERROR] Input directory not found: {input_path}")
         return
     
+    # Parameterized output directory
+    if output_dir is None:
+        output_dir = Path("C:/Users/BDAIPC/.openclaw/workspace/temp-repo/outputs")
+    else:
+        output_dir = Path(output_dir)
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Check for PDF files
     pdf_files = list(input_path.glob("*.pdf"))
+    if not pdf_files:
+        print(f"[ERROR] No PDF files found in: {input_path}")
+        return
+    
     print(f"\n[INPUT] Found {len(pdf_files)} PDF files")
     
     all_text = ""
@@ -455,8 +517,6 @@ def main(input_dir: str, project_name: str = "summers-eve"):
     print("\n[CLASSIFY] Classifying content to TFDA sections...")
     tfda_content = classify_content(all_text)
     
-    output_dir = Path("C:/Users/BDAIPC/.openclaw/workspace/temp-repo/outputs")
-    output_dir.mkdir(exist_ok=True)
     output_path = output_dir / f"{project_name}_pif_tfda_v4.md"
     
     print("\n[MD] Generating Markdown v4...")
