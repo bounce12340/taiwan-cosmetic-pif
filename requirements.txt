@@ -1,0 +1,16 @@
+# 台灣化妝品 PIF 檔案製作 Skill - 依賴套件
+
+# 核心依賴
+pypdf>=3.0.0
+python-docx>=1.0.0
+
+# PDF 處理（可選，用於 PaddleOCR 流程）
+pymupdf>=1.23.0
+
+# PaddleOCR（可選，用於高品質 OCR）
+# paddlepaddle>=2.5.0  # Windows 可能需要特定版本
+# paddleocr>=2.7.0
+
+# 工具套件
+requests>=2.31.0
+Pillow>=10.0.0
