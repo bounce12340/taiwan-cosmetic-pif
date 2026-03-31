@@ -523,6 +523,21 @@ def main(input_dir: str, project_name: str = "summers-eve", output_dir: str = No
     generate_markdown_v4(tfda_content, ingredients, micro_data, phys_chem, stability, 
                          str(output_path), project_name, total_pages, len(all_text))
     
+    # Optional: Run cleanup if cleanup script exists
+    cleanup_script = Path(__file__).parent / "cleanup_pif_v3.py"
+    if cleanup_script.exists():
+        print("\n[CLEARUP] Running cleanup_pif_v3.py...")
+        import subprocess
+        result = subprocess.run(
+            ["python", str(cleanup_script), str(output_path)],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            print(f"  Cleanup output: {result.stdout[:200]}")
+        else:
+            print(f"  Cleanup error: {result.stderr[:200]}")
+    
     print("\n" + "=" * 60)
     print("Conversion Complete!")
     print("=" * 60)
