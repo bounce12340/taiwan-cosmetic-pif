@@ -526,15 +526,43 @@ def main(input_dir: str, project_name: str = "summers-eve", output_dir: str = No
     # Optional: Run cleanup if cleanup script exists
     cleanup_script = Path(__file__).parent / "cleanup_pif_v3.py"
     if cleanup_script.exists():
-        print("\n[CLEARUP] Running cleanup_pif_v3.py...")
+        print(f"\n[CLEARUP] Running cleanup_pif_v3.py on {output_path.name}...")
         import subprocess
+        
+        # Create cleanup script that processes the output file
+        cleanup_code = f'''
+import sys
+sys.path.insert(0, r"{cleanup_script.parent}")
+from cleanup_pif_v3 import cleanup_content
+from pathlib import Path
+
+input_path = Path(r"{output_path}")
+output_path = input_path.parent / f"{{input_path.stem}}_clean{{input_path.suffix}}"
+
+print(f"  Reading: {{input_path}}")
+with open(input_path, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+print(f"  Original size: {{len(content):,}} characters")
+cleaned, stats = cleanup_content(content)
+
+print(f"  Cleaned size: {{len(cleaned):,}} characters")
+print(f"  Removed {{stats.get('garbage_removal', {{}}).get('removed_lines', 0)}} garbage lines")
+print(f"  Corrected {{stats.get('ingredient_table', {{}}).get('corrected_concentrations', 0)}} concentrations")
+
+with open(output_path, 'w', encoding='utf-8') as f:
+    f.write(cleaned)
+
+print(f"  Output: {{output_path}}")
+'''
         result = subprocess.run(
-            ["python", str(cleanup_script), str(output_path)],
+            ["python", "-c", cleanup_code],
             capture_output=True,
             text=True
         )
         if result.returncode == 0:
-            print(f"  Cleanup output: {result.stdout[:200]}")
+            for line in result.stdout.strip().split('\n'):
+                print(f"  {line}")
         else:
             print(f"  Cleanup error: {result.stderr[:200]}")
     
